@@ -42,7 +42,22 @@ VNC_BIND="${VNC_BIND:-127.0.0.1}"
 log "Starting noVNC (websockify) on $VNC_BIND:$NOVNC_PORT -> 127.0.0.1:$VNC_PORT"
 websockify --web "$NOVNC_DIR" "$VNC_BIND:$NOVNC_PORT" "127.0.0.1:$VNC_PORT" >/var/log/novnc.log 2>&1 &
 
+log "Cleaning stale X sockets from previous runs..."
+rm -f /tmp/.X*-lock 2>/dev/null || true
+rm -f /tmp/.X11-unix/X* 2>/dev/null || true
+
 log "VNC watcher started -- will attach x11vnc when Camoufox's Xvfb appears"
+
+# Verify a display number has a live Xvfb process (not a stale socket)
+is_xvfb_alive() {
+  local disp_num="$1"
+  [ -z "$disp_num" ] && return 1
+  # Check: is there an Xvfb process for this display number?
+  ps -eo args= 2>/dev/null | grep -qE "Xvfb.*:${disp_num}\b" && return 0
+  # Fallback: is there ANY Xvfb process running at all?
+  ps -eo args= 2>/dev/null | grep -q "/Xvfb " && return 0
+  return 1
+}
 
 # Detect Xvfb display number from /tmp/.X*-lock or ps args
 detect_display() {
@@ -55,19 +70,19 @@ detect_display() {
   ' | head -1)
   [ -n "$disp" ] && echo "$disp" && return
 
-  # Second try: Xvfb in -displayfd mode, detect from lock files
+  # Second try: Xvfb in -displayfd mode, detect from lock files (only if Xvfb is alive)
   local lockfile
   lockfile=$(ls /tmp/.X*-lock 2>/dev/null | head -1)
   if [ -n "$lockfile" ]; then
     local num
     num=$(echo "$lockfile" | grep -o 'X[0-9]*' | tr -d 'X')
-    [ -n "$num" ] && echo ":$num" && return
+    [ -n "$num" ] && is_xvfb_alive "$num" && echo ":$num" && return || true
   fi
 
-  # Third try: any /tmp/.X* socket or file
+  # Third try: any /tmp/.X* socket or file (only if Xvfb is alive)
   local xsock
   xsock=$(ls /tmp/.X* 2>/dev/null | grep -o 'X[0-9]*$' | head -1 | tr -d 'X')
-  [ -n "$xsock" ] && echo ":$xsock" && return
+  [ -n "$xsock" ] && is_xvfb_alive "$xsock" && echo ":$xsock" && return || true
 
   echo ""
 }
